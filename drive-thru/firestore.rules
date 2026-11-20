@@ -1,0 +1,50 @@
+rules_version = '2';
+
+// Anyone can read wait times. Writing requires an anonymous sign-in (done
+// automatically by the page), and each device can only touch its own trips.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function nowMs() { return request.time.toMillis(); }
+    function signedIn() { return request.auth != null; }
+
+    match /trips/{tripId} {
+      allow read: if true;
+
+      // New check-in: own uid, arrival no more than 60 min in the past,
+      // not open-ended, and written together with a fresh rate-limit stamp.
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['uid', 'arrivedAt', 'leftAt', 'createdAt'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.arrivedAt is int
+        && request.resource.data.arrivedAt <= nowMs() + 60000
+        && request.resource.data.arrivedAt >= nowMs() - 60 * 60000
+        && request.resource.data.leftAt == null
+        && request.resource.data.createdAt == request.time
+        && getAfter(/databases/$(database)/documents/limits/$(request.auth.uid)).data.at == request.time;
+
+      // Check-out: only your own open trip, only the leftAt field, within 3 hours.
+      allow update: if signedIn()
+        && resource.data.uid == request.auth.uid
+        && resource.data.leftAt == null
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['leftAt'])
+        && request.resource.data.leftAt is int
+        && request.resource.data.leftAt > resource.data.arrivedAt
+        && request.resource.data.leftAt <= nowMs() + 60000
+        && request.resource.data.leftAt - resource.data.arrivedAt <= 3 * 60 * 60000;
+
+      // Remove your own check-in (left without ordering).
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    // One stamp per device; a new check-in needs the previous one to be 5+ minutes old.
+    match /limits/{uid} {
+      allow read: if false;
+      allow write: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['at'])
+        && request.resource.data.at == request.time
+        && (resource == null || request.time > resource.data.at + duration.value(5, 'm'));
+    }
+  }
+}
