@@ -22,7 +22,7 @@ Runs on Firebase's free (Spark) plan.
 npm install -g firebase-tools
 firebase login
 cd drive-thru
-firebase use --add          # pick your project
+# .firebaserc already points at the project
 firebase deploy             # deploys hosting + rules
 ```
 
